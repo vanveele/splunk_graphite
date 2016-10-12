@@ -1,18 +1,9 @@
 #!/usr/bin/env python
 
-"""Graphite output for Splunk.
-
-Dear Reader,
-I've (gba) have made every effort to make this a 'sane' Python program.
-However, compromises have been made due to the nature of Splunk's Omnibus
-Python distribution. Please keep that in mind when engaging in future
-development :).
-
-"""
+"""Datadog output for Splunk."""
 
 
-__author__ = 'Greg Albrecht <gba@onbeep.com>'
-__copyright__ = 'Copyright 2014 OnBeep, Inc.'
+__author__ = 'Robert van Veelen <robert.vanveelen@gmail.com>'
 __license__ = 'Apache License, Version 2.0'
 
 
@@ -22,6 +13,7 @@ import csv
 import gzip
 import os
 import socket
+import requests
 import sys
 import time
 import traceback
@@ -29,6 +21,11 @@ import traceback
 
 # We'll ignore these number-like Splunk fields when forwarding events.
 IGNORE_FIELDS = ['linecount', 'timeendpos', 'timestartpos']
+DD_API_KEY = ''
+DD_API_URL = 'http://localhost:17123/api/v1/series'
+DD_API_PARAMS = {
+    'api_key': DD_API_KEY
+}
 
 
 def generate_splunk_error(trace):
@@ -45,9 +42,9 @@ def generate_splunk_error(trace):
 
 
 def get_config_file():
-    """Gets Graphite output config file location.
+    """Gets Datadog output config file location.
 
-    @return: Path to Graphite output config file.
+    @return: Path to Datadog output config file.
     @rtype: str
     """
     config_file = ''
@@ -55,8 +52,8 @@ def get_config_file():
 
     if splunk_home and os.path.exists(splunk_home):
         config_path = os.path.join(
-            splunk_home, 'etc', 'apps', 'splunk_graphite', 'local',
-            'graphite.conf')
+            splunk_home, 'etc', 'apps', 'splunk_datadog', 'local',
+            'datadog.conf')
         if os.path.exists(config_path):
             config_file = config_path
 
@@ -64,8 +61,8 @@ def get_config_file():
 
 
 # TODO(gba) Refactor this config code, there's too many conditionals here.
-def get_graphite_config(config_file, args=None):
-    """Extracts Graphite output config settings from file or args.
+def get_datadog_config(config_file, args=None):
+    """Extracts Datadog output config settings from file or args.
 
     @param config_file: Config file from which to attempt to retrieve settings.
     @type config_file: str
@@ -76,31 +73,33 @@ def get_graphite_config(config_file, args=None):
     @rtype: dict
     """
     if args:
-        graphite_config = {
+        datadog_config = {
             'host': args.host,
             'port': args.port,
             'namespace': args.namespace,
             'prefix': args.prefix,
-            'namefield': args.namefield
+            'namefield': args.namefield,
+            'tags': args.tags
         }
     else:
-        graphite_config = {
+        datadog_config = {
             'host': 'localhost',
             'port': '2003',
             'namespace': 'splunk.search',
             'prefix': '',
+            'tags': None
             'namefield': None
         }
 
     if config_file and os.path.exists(config_file):
-        config = ConfigParser.SafeConfigParser(graphite_config)
+        config = ConfigParser.SafeConfigParser(datadog_config)
         config.read(config_file)
 
         # Cast ConfigParser.items()'s list of tuples into dict:
-        graphite_config = dict(
-            (x, y) for x, y in config.items('graphite_config'))
+        datadog_config = dict(
+            (x, y) for x, y in config.items('datadog_config'))
 
-    return graphite_config
+    return datadog_config
 
 
 def extract_results(results_file):
@@ -161,8 +160,7 @@ def collect_metrics(results, select_fields=None, namefield=None):
             if namefield and nameprefix and metric_name:
                 metric_name = '.'.join([nameprefix, metric_name])
 
-            # TODO(gba) Graphite wants UTC time, which may not be the time we
-            #           receive in the event.
+            # TODO use datadog API if time is required.
             if '_time' in result:
                 result['__ts__'] = result['_time']
             elif '_indextime' in result:
@@ -180,6 +178,14 @@ def collect_metrics(results, select_fields=None, namefield=None):
                     # Carbon wants an int:
                     str(int(float(result['__ts__'])))
                 ])
+
+                metric = {
+                    'metric': metric_name,
+                    'points': [[str(int(float(result['__ts__']))), str(metric_value)]],
+                    'type': gauge,
+                    'host': socket.gethostname(),
+                    'tags': ['test']
+                }
                 metrics.append(metric)
 
     return metrics
@@ -208,7 +214,7 @@ def render_metrics(metrics, namespace, prefix=None):
 
 def process_results(results, args=None):
     """
-    Processes Splunk search results into Graphite output.
+    Processes Splunk search results into Datadog output.
 
     @param results: Splunk search results.
     @type results: dict
@@ -222,18 +228,18 @@ def process_results(results, args=None):
         config_args = None
         select_fields = None
 
-    graphite_config = get_graphite_config(get_config_file(), config_args)
+    datadog_config = get_datadog_config(get_config_file(), config_args)
 
     collected_metrics = collect_metrics(
         results=results,
         select_fields=select_fields,
-        namefield=graphite_config['namefield']
+        namefield=datadog_config['namefield']
     )
 
     rendered_metrics = render_metrics(
         metrics=collected_metrics,
-        namespace=graphite_config['namespace'],
-        prefix=graphite_config['prefix']
+        namespace=datadog_config['namespace'],
+        prefix=datadog_config['prefix']
     )
 
     if not config_args.noop:
@@ -251,7 +257,7 @@ def process_results(results, args=None):
 
 
 def send_metrics(metrics, host, port):
-    """Sends metrics to Graphite host.
+    """Sends metrics to Datadog API.
 
     @param metrics: List of metrics to send.
     @type metrics: list
@@ -267,16 +273,27 @@ def send_metrics(metrics, host, port):
         sock.sendall('\n'.join(metrics) + '\n')
         sock.shutdown(1)
 
+    if metrics:
+        series = json.dumps({
+            'series': metrics
+        })
+
+        response = requests.put(
+            url = DD_API_URL,
+            params = DD_API_PARAMS,
+            data = series
+        )
+
 
 def alert_command():
-    """Invokes Graphite output as a Saved-Search Alert Command."""
+    """Invokes Datadog output as a Saved-Search Alert Command."""
     results = extract_results(os.environ.get('SPLUNK_ARG_8'))
     process_results(results)
 
 
 def search_command(args):
     """
-    Invokes Graphite output as a Search Command.
+    Invokes Datadog output as a Search Command.
 
     @param args: Config settings passed in as arguments
     @type args: `argparse.ArgumentParser`
@@ -303,7 +320,7 @@ def main(argz=None):
 
             parser = argparse.ArgumentParser()
             parser.add_argument('--host', default='localhost')
-            parser.add_argument('--port', default='2003')
+            parser.add_argument('--port', default='17123')
             parser.add_argument('--namespace', default='splunk.search')
             parser.add_argument('--prefix', default=None)
             parser.add_argument('--namefield', default=None)

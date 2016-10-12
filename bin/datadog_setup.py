@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 
-"""Graphite output Splunk Setup REST Handler."""
+"""Datadog output Splunk Setup REST Handler."""
 
-__author__ = 'Greg Albrecht <gba@onbeep.com>'
-__copyright__ = 'Copyright 2014 OnBeep, Inc.'
+__author__ = 'Robert van Veelen <robert.vanveelen@gmail.com>'
 __license__ = 'Apache License, Version 2.0'
 
 
@@ -14,27 +13,28 @@ import shutil
 import splunk.admin
 
 
-class ConfigGraphiteOutputApp(splunk.admin.MConfigHandler):
-    """Graphite output Splunk Setup REST Handler."""
+class ConfigDatadogOutputApp(splunk.admin.MConfigHandler):
+    """Datadog output Splunk Setup REST Handler."""
 
     def setup(self):
-        """Sets up required configuration params for splunk_graphite."""
+        """Sets up required configuration params for splunk_datadog."""
         if self.requestedAction == splunk.admin.ACTION_EDIT:
             self.supportedArgs.addOptArg('host')
             self.supportedArgs.addOptArg('port')
             self.supportedArgs.addOptArg('prefix')
             self.supportedArgs.addOptArg('namespace')
+            self.supportedArgs.addOptArg('tags')
 
     def handleList(self, confInfo):
-        """Handles configuration params for splunk_graphite."""
-        conf = self.readConf('graphite')
+        """Handles configuration params for splunk_datadog."""
+        conf = self.readConf('datadog')
         if conf:
             for stanza, settings in conf.items():
                 for key, val in settings.items():
                     confInfo[stanza].append(key, val)
 
     def handleEdit(self, confInfo):
-        """Handles editing configuration params for splunk_graphite."""
+        """Handles editing configuration params for splunk_datadog."""
         del confInfo
 
         if self.callerArgs.data['host'][0] in [None, '']:
@@ -45,17 +45,19 @@ class ConfigGraphiteOutputApp(splunk.admin.MConfigHandler):
             self.callerArgs.data['namespace'][0] = ''
         if self.callerArgs.data['prefix'][0] in [None, '']:
             self.callerArgs.data['prefix'][0] = ''
+        if self.callerArgs.data['tags'][0] in [None, '']:
+            self.callerArgs.data['tags'][0] = ''
 
-        self.writeConf('graphite', 'graphite_config', self.callerArgs.data)
+        self.writeConf('datadog', 'datadog_config', self.callerArgs.data)
 
-        install_graphite_py(os.environ.get('SPLUNK_HOME'))
+        install_datadog_py(os.environ.get('SPLUNK_HOME'))
 
 
-def install_graphite_py(splunk_home):
-    """Copies graphite.py to Splunk's bin/scripts directory."""
+def install_datadog_py(splunk_home):
+    """Copies datadog.py to Splunk's bin/scripts directory."""
 
     script_src = os.path.join(
-        splunk_home, 'etc', 'apps', 'splunk_graphite', 'bin', 'graphite.py')
+        splunk_home, 'etc', 'apps', 'splunk_datadog', 'bin', 'datadog.py')
     script_dest = os.path.join(splunk_home, 'bin', 'scripts')
 
     logging.info(
@@ -64,4 +66,4 @@ def install_graphite_py(splunk_home):
 
 
 if __name__ == '__main__':
-    splunk.admin.init(ConfigGraphiteOutputApp, splunk.admin.CONTEXT_NONE)
+    splunk.admin.init(ConfigDatadogOutputApp, splunk.admin.CONTEXT_NONE)
